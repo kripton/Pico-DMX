@@ -112,18 +112,20 @@ void dmxinput_dma_handler() {
         if(active_inputs[i]!=nullptr && (dma_hw->ints0 & (1u<<i))) {
             dma_hw->ints0 = 1u << i;
             volatile DmxInput *instance = active_inputs[i];
-            dma_channel_set_write_addr(i, instance->_buf, true);
+
+            // Trigger the callback if we have one
+            if (instance->_cb != nullptr) {
+                (*(instance->_cb))((DmxInput*)instance);
+            }
+
             pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
             pio_sm_clear_fifos(instance->_pio, instance->_sm);
+            dma_channel_set_write_addr(i, instance->_buf, true);
 #ifdef ARDUINO
             instance->_last_packet_timestamp = millis();
 #else
             instance->_last_packet_timestamp = to_ms_since_boot(get_absolute_time());
 #endif
-            // Trigger the callback if we have one
-            if (instance->_cb != nullptr) {
-                (*(instance->_cb))((DmxInput*)instance);
-            }
         }
     }
 }
