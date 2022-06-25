@@ -1,11 +1,11 @@
-; Author: Jostein Løwer, github: jostlowe
+; Author: Jostein Løwer, github: jostlowe, inverted version by Jannis Achstetter
 ; SPDX-License-Identifier: BSD-3-Clause
 ; 
-; PIO program for outputting the DMX lighting protocol.
+; PIO program for outputting the DMX lighting protocol, negative/inverted line
 ; Compliant with ANSI E1.11-2008 (R2018)
 ; The program assumes a PIO clock frequency of exactly 1MHz
 
-.program DmxOutput
+.program DmxOutputInverted
 .side_set 1 opt
 
 

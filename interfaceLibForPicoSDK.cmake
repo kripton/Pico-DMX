@@ -17,6 +17,9 @@ pico_generate_pio_header(picodmx
 pico_generate_pio_header(picodmx
     ${CMAKE_CURRENT_LIST_DIR}/extras/DmxOutput.pio
 )
+pico_generate_pio_header(picodmx
+    ${CMAKE_CURRENT_LIST_DIR}/extras/DmxOutputInverted.pio
+)
 
 target_include_directories(picodmx INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/src
