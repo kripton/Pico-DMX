@@ -7,6 +7,7 @@
 
 #include "DmxOutput.h"
 #include "DmxOutput.pio.h"
+#include "DmxOutputInverted.pio.h"
 
 #if defined(ARDUINO_ARCH_MBED)
   #include <clocks.h>
@@ -16,8 +17,10 @@
   #include "hardware/irq.h"
 #endif
 
-DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
+DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio, bool inverted, bool differential)
 {
+    _differential = differential;
+
     /* 
     Attempt to load the DMX PIO assembly program 
     into the PIO program memory

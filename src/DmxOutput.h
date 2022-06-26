@@ -26,8 +26,11 @@ class DmxOutput
     uint _prgm_offset;
     uint _pin;
     uint _sm;
+    uint _sm2; // Used for differential output
+    bool _differential;
     PIO _pio;
     uint _dma;
+    uint _dma2; // Used for differential output
 
 public:
     /*
@@ -61,10 +64,21 @@ public:
        Param: pio
        defaults to pio0. pio0 can run up to 4
        DMX instances. If you really need more, you can
-       run 4 more on pio1  
+       run 4 more on pio1
+
+       Param: inverted
+       Generates the inverted (= negative) DMX512-signal
+
+       Param: differential
+       Generates TWO (positive and negative) signals so the DMX512-line can be
+       driven directly from the GPIOs. The pin specified plus the next one
+       are being used. If inverted is also set to true, the first pin carries
+       the negative signal and the next pin holds the positive signal.
+       If this is set to true, This instance of DmxOutput will use TWO
+       state machines instead of one on the given PIO.
     */
 
-    return_code begin(uint pin, PIO pio = pio0);
+    return_code begin(uint pin, PIO pio = pio0, bool inverted = false, bool differential = false);
 
     /*
         write a DMX universe to the DMX transmitter instance.
