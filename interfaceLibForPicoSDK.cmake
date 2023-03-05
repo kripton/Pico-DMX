@@ -21,3 +21,8 @@ pico_generate_pio_header(picodmx
 target_include_directories(picodmx INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/src
 )
+
+target_link_libraries(picodmx INTERFACE
+    hardware_dma
+    hardware_pio
+)
