@@ -22,11 +22,10 @@
 #define DMX_UNIVERSE_SIZE 512
 #define DMX_SM_FREQ 1000000
 
-#define DMXINPUT_BUFFER_SIZE(start_channel, num_channels) (num_channels+1)
+#define DMXINPUT_BUFFER_SIZE(num_channels) (num_channels+1)
 class DmxInput
 {
     uint _pin;
-    int32_t _start_channel;
     int32_t _num_channels;
 
 public:
@@ -37,7 +36,7 @@ public:
     volatile PIO _pio;
     volatile uint _sm;
     volatile uint _dma_chan;
-    volatile unsigned long _last_packet_timestamp=0;
+    volatile bool _frame_finished=0;
     void (*_cb)(DmxInput*);
     /*
         All different return codes for the DMX class. Only the SUCCESS
@@ -90,12 +89,6 @@ public:
         provide a callback function that will be called without arguments.
     */
     void read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)(DmxInput* instance) = nullptr);
-
-    /*
-        Get the timestamp (like millis()) from the moment the latest dmx packet was received.
-        May be used to detect if the dmx signal has stopped coming in.
-    */
-    unsigned long latest_packet_timestamp();
 
     /*
         Get the pin this instance is listening on

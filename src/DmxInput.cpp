@@ -95,7 +95,6 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     _pio = pio;
     _sm = sm;
     _pin = pin;
-    _start_channel = start_channel;
     _num_channels = num_channels;
     _buf = nullptr;
     _cb = nullptr;
@@ -116,13 +115,19 @@ void DmxInput::read(volatile uint8_t *buffer)
     if(_buf==nullptr) {
         read_async(buffer);
     }
-    unsigned long start = _last_packet_timestamp;
-    while(_last_packet_timestamp == start) {
+    _frame_finished = false;
+    while(!_frame_finished) {
         tight_loop_contents();
     }
 }
 
 void dmxinput_dma_handler() {
+
+    // MAX_NUM channels have been received OR BREAK-detect timer has fired!
+    // * cancel the input's BREAK-detect timer. A new one will be created on
+    //   the first falling edge from now (= end of MAB)
+    // * Set _frame_finished to true so the sync wrapper works
+
     for(int i=0;i<NUM_DMA_CHANS;i++) {
         if(active_inputs[i]!=nullptr && (dma_hw->ints0 & (1u<<i))) {
             dma_hw->ints0 = 1u << i;
@@ -130,18 +135,15 @@ void dmxinput_dma_handler() {
             dma_channel_set_write_addr(i, instance->_buf, true);
             pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
             pio_sm_clear_fifos(instance->_pio, instance->_sm);
-#ifdef ARDUINO
-            instance->_last_packet_timestamp = millis();
-#else
-            instance->_last_packet_timestamp = to_ms_since_boot(get_absolute_time());
-#endif
+
+            instance->_frame_finished = true;
+
             // Trigger the callback if we have one
             if (instance->_cb != nullptr) {
                 (*(instance->_cb))((DmxInput*)instance);
             }
         }
     }
-    
 }
 
 void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)(DmxInput*)) {
@@ -173,7 +175,7 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
         &cfg,
         NULL,    // dst
         &_pio->rxf[_sm],  // src
-        DMXINPUT_BUFFER_SIZE(_start_channel, _num_channels),  // transfer count,
+        DMXINPUT_BUFFER_SIZE(_num_channels),  // transfer count,
         false
     );
 
@@ -185,17 +187,10 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     dma_channel_set_write_addr(_dma_chan, buffer, true);
     pio_sm_exec(_pio, _sm, pio_encode_jmp(prgm_offsets[pio_get_index(_pio)]));
     pio_sm_clear_fifos(_pio, _sm);
-#ifdef ARDUINO
-    _last_packet_timestamp = millis();
-#else
-    _last_packet_timestamp = to_ms_since_boot(get_absolute_time());
-#endif
+
+    _frame_finished = false;
 
     pio_sm_set_enabled(_pio, _sm, true);
-}
-
-unsigned long DmxInput::latest_packet_timestamp() {
-    return _last_packet_timestamp;
 }
 
 uint DmxInput::pin() {
