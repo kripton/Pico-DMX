@@ -8,12 +8,7 @@
 .program DmxInput
 .define dmx_bit 4                     ; As DMX has a baudrate of 250.000kBaud, a single bit is 4us
 
-break_reset:
-    set x, 29                         ; Setup a counter to count the iterations on break_loop
-
-break_loop:                           ; Break loop lasts for 8us. The entire break must be minimum 30*3us = 90us
-    jmp pin break_reset               ; Go back to start if pin goes high during the break
-    jmp x-- break_loop   [1]          ; Decrease the counter and go back to break loop if x>0 so that the break is not done
+wait_for_mab:
     wait 1 pin 0                      ; Stall until line goes high for the Mark-After-Break (MAB) 
 
 .wrap_target

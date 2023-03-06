@@ -8,13 +8,7 @@
 .program DmxInputInverted
 .define dmx_bit 4                     ; As DMX has a baudrate of 250.000kBaud, a single bit is 4us
 
-break_reset:
-    set x, 29                         ; Setup a counter to count the iterations on break_loop
-break_in_progress:
-    jmp pin break_continue
-    jmp break_reset                   ; break should be high the entire time. if it goes low, start over
-break_continue:
-    jmp x-- break_in_progress
+wait_for_mab:
     wait 0 pin 0                      ; wait until MAB started
 
 .wrap_target

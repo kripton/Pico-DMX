@@ -10,31 +10,27 @@
 // DmxInputInverted //
 // ---------------- //
 
-#define DmxInputInverted_wrap_target 5
-#define DmxInputInverted_wrap 12
+#define DmxInputInverted_wrap_target 1
+#define DmxInputInverted_wrap 8
 
 static const uint16_t DmxInputInverted_program_instructions[] = {
-    0xe03d, //  0: set    x, 29                      
-    0x00c3, //  1: jmp    pin, 3                     
-    0x0000, //  2: jmp    0                          
-    0x0041, //  3: jmp    x--, 1                     
-    0x2020, //  4: wait   0 pin, 0                   
+    0x2020, //  0: wait   0 pin, 0
             //     .wrap_target
-    0x20a0, //  5: wait   1 pin, 0                   
-    0xe427, //  6: set    x, 7                   [4] 
-    0x4001, //  7: in     pins, 1                    
-    0x0247, //  8: jmp    x--, 7                 [2] 
-    0x2020, //  9: wait   0 pin, 0                   
-    0xa0ce, // 10: mov    isr, !isr                  
-    0x4078, // 11: in     null, 24                   
-    0x8020, // 12: push   block                      
+    0x20a0, //  1: wait   1 pin, 0
+    0xe427, //  2: set    x, 7                   [4]
+    0x4001, //  3: in     pins, 1
+    0x0243, //  4: jmp    x--, 3                 [2]
+    0x2020, //  5: wait   0 pin, 0
+    0xa0ce, //  6: mov    isr, !isr
+    0x4078, //  7: in     null, 24
+    0x8020, //  8: push   block
             //     .wrap
 };
 
 #if !PICO_NO_HARDWARE
 static const struct pio_program DmxInputInverted_program = {
     .instructions = DmxInputInverted_program_instructions,
-    .length = 13,
+    .length = 9,
     .origin = -1,
 };
 
