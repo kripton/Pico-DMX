@@ -25,4 +25,5 @@ target_include_directories(picodmx INTERFACE
 target_link_libraries(picodmx INTERFACE
     hardware_dma
     hardware_pio
+    pico_time
 )

@@ -8,6 +8,11 @@
 #ifndef DMX_INPUT_H
 #define DMX_INPUT_H
 
+#define PIN_DEBUG_INPUT_TIMER_RESET 16
+#define PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED 17
+#define PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER 19
+#define PIN_DEBUG_INPUT_DMA_HANDLER 20
+
 #if defined(ARDUINO_ARCH_MBED)
   #include <dma.h>
   #include <pio.h>
@@ -17,9 +22,9 @@
   #endif
   #include "hardware/dma.h"
   #include "hardware/pio.h"
+  #include "pico/time.h"
 #endif
 
-#define DMX_UNIVERSE_SIZE 512
 #define DMX_SM_FREQ 1000000
 
 #define DMXINPUT_BUFFER_SIZE(num_channels) (num_channels+1)
@@ -36,8 +41,11 @@ public:
     volatile PIO _pio;
     volatile uint _sm;
     volatile uint _dma_chan;
-    volatile bool _frame_finished=0;
+    volatile bool _frame_finished = 0;
+    volatile alarm_id_t _alarm_id;      // ID of the BREAK-detect alarm
+    volatile uint32_t _channels_captured;
     void (*_cb)(DmxInput*);
+
     /*
         All different return codes for the DMX class. Only the SUCCESS
         Return code guarantees that the DMX output instance was properly configured

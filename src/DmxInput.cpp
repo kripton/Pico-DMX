@@ -27,6 +27,10 @@ The interrupt handler has only the ints0 register to go on, so this array needs 
 #define NUM_DMA_CHANS 12
 volatile DmxInput *active_inputs[NUM_DMA_CHANS] = {nullptr};
 
+// This array maps GPIOs to DmxInput instances for fast access in the fallingEdgeHandler
+// Is there a constant for how many GPIOs there are?
+volatile DmxInput* gpioInstanceMap[32] = {nullptr};
+
 DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_channels, PIO pio, bool inverted)
 {
     uint pio_ind = pio_get_index(pio);
@@ -98,6 +102,8 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     _num_channels = num_channels;
     _buf = nullptr;
     _cb = nullptr;
+    _frame_finished = false;
+    _channels_captured = 0;
 
     _dma_chan = dma_claim_unused_channel(true);
 
@@ -107,49 +113,146 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     }
     active_inputs[_dma_chan] = this;
 
+    gpioInstanceMap[_pin] = this;
+
     return SUCCESS;
 }
 
 void DmxInput::read(volatile uint8_t *buffer)
 {
-    if(_buf==nullptr) {
+    if (buffer == nullptr) {
+        // Trigger a new capture
         read_async(buffer);
     }
+
+    // Wait until one complete DMX frame has been captured
     _frame_finished = false;
     while(!_frame_finished) {
         tight_loop_contents();
     }
+
+    // Stop the DMA so that buffer will not be overwritten
+    dma_channel_abort(_dma_chan);
+    // clear the spurious IRQ (if there was one)
+    dma_channel_acknowledge_irq0(_dma_chan);
 }
 
-void dmxinput_dma_handler() {
-
-    // MAX_NUM channels have been received OR BREAK-detect timer has fired!
+void __isr endOfFrameCommonHandler(volatile DmxInput* instance) {
+    // num_channels have been received OR BREAK-detect timer has fired!
     // * cancel the input's BREAK-detect timer. A new one will be created on
     //   the first falling edge from now (= end of MAB)
     // * Set _frame_finished to true so the sync wrapper works
+    // * Trigger the callback to the user of the library
+    // * Reset and re-trigger the PIO SM and the DMA engine
 
-    for(int i=0;i<NUM_DMA_CHANS;i++) {
-        if(active_inputs[i]!=nullptr && (dma_hw->ints0 & (1u<<i))) {
-            dma_hw->ints0 = 1u << i;
+#ifdef PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER
+    gpio_put(PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER, 1);
+#endif
+
+    // Stop the BREAK-detect timer
+    cancel_alarm(instance->_alarm_id);
+
+    // Make sure sync-wrapper stops waiting
+    instance->_frame_finished = true;
+
+    // Calculate how many channels have been recorded:
+    // Get the DMA-channels's WRITE-ADDR and subtract the instance's
+    // buffer address since it began writing there.
+    // Finally, subtract 2 (one for the start channel, one since WRITE-ADDR
+    // contains the address to be written NEXT)
+    instance->_channels_captured = (dma_hw->ch[instance->_dma_chan].write_addr - (uint32_t)instance->_buf) - 2;
+
+    // Trigger the callback if we have one
+    if (instance->_cb != nullptr) {
+        (*(instance->_cb))((DmxInput*)instance);
+    }
+
+#ifdef PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER
+    gpio_put(PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER, 0);
+#endif
+}
+
+void __isr dmxinput_dma_handler() {
+    // Loop through all available DMA channels to find the instance of
+    // DmxInput that just triggered
+    for (int i = 0; i < NUM_DMA_CHANS; i++) {
+        if ((active_inputs[i] != nullptr) && (dma_hw->ints0 & (1u<<i))) {
+#ifdef PIN_DEBUG_INPUT_DMA_HANDLER
+    gpio_put(PIN_DEBUG_INPUT_DMA_HANDLER, 1);
+#endif
+            dma_hw->ints0 = 1u << i; // Reset the interrupt
             volatile DmxInput *instance = active_inputs[i];
-            dma_channel_set_write_addr(i, instance->_buf, true);
-            pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
-            pio_sm_clear_fifos(instance->_pio, instance->_sm);
 
-            instance->_frame_finished = true;
-
-            // Trigger the callback if we have one
-            if (instance->_cb != nullptr) {
-                (*(instance->_cb))((DmxInput*)instance);
-            }
+            endOfFrameCommonHandler(instance);
+#ifdef PIN_DEBUG_INPUT_DMA_HANDLER
+    gpio_put(PIN_DEBUG_INPUT_DMA_HANDLER, 0);
+#endif
         }
     }
+}
+
+int64_t __isr breakDetectAlarmHandler(alarm_id_t id, void *user_data) {
+    // An alarm fired. That means that 88us passed since the last falling edge
+    // => We assume the DMX frame is finished
+
+    // Get the instance
+    if (user_data == nullptr) {
+        return 0;
+    }
+    DmxInput* instance = (DmxInput*)user_data;
+
+    // Sanity check
+    if (instance->_alarm_id != id) {
+        return 0;
+    }
+
+#ifdef PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED
+    gpio_put(PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED, 1);
+#endif
+
+    endOfFrameCommonHandler(instance);
+
+    // Reset the state machine so it waits for the next MAB
+    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true); // Does is reset the counter so it re-counts "transfer size"?
+    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
+    pio_sm_clear_fifos(instance->_pio, instance->_sm);
+
+#ifdef PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED
+    gpio_put(PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED, 0);
+#endif
+
+    // Do not re-schedule the alarm
+    return 0;
+}
+
+void __isr fallingEdgeHandler(uint gpio, uint32_t events) {
+    if (events != GPIO_IRQ_EDGE_FALL) {
+        return;
+    }
+
+    volatile DmxInput* instance = gpioInstanceMap[gpio];
+    if (instance == nullptr) {
+        return;
+    }
+
+#ifdef PIN_DEBUG_INPUT_TIMER_RESET
+    gpio_put(PIN_DEBUG_INPUT_TIMER_RESET, 1);
+#endif
+
+    // Stop the currently running BREAK detect timer
+    bool canceled = cancel_alarm(instance->_alarm_id);
+    // Start a new timer RINGing after 88us from NOW
+    instance->_alarm_id = add_alarm_in_us(88, breakDetectAlarmHandler, (void*)instance, false);
+
+#ifdef PIN_DEBUG_INPUT_TIMER_RESET
+    gpio_put(PIN_DEBUG_INPUT_TIMER_RESET, 0);
+#endif
 }
 
 void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)(DmxInput*)) {
 
     _buf = buffer;
-    if (inputUpdatedCallback!=nullptr) {
+    if (inputUpdatedCallback != nullptr) {
         _cb = inputUpdatedCallback;
     }
 
@@ -179,14 +282,20 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
         false
     );
 
+    // Set up an interrupt handler that is fired as soon as the
+    // DMA channel reaches its transfer count
     dma_channel_set_irq0_enabled(_dma_chan, true);
     irq_set_exclusive_handler(DMA_IRQ_0, dmxinput_dma_handler);
     irq_set_enabled(DMA_IRQ_0, true);
 
-    //aaand start!
-    dma_channel_set_write_addr(_dma_chan, buffer, true);
-    pio_sm_exec(_pio, _sm, pio_encode_jmp(prgm_offsets[pio_get_index(_pio)]));
-    pio_sm_clear_fifos(_pio, _sm);
+    // Set up a BREAK-detect-timer that RINGs after 88us (after the last falling edge)
+    _alarm_id = add_alarm_in_us(88, breakDetectAlarmHandler, this, false);
+
+    // Set up a "falling edge" interrupt for our GPIO
+    gpio_set_irq_enabled_with_callback(_pin, GPIO_IRQ_EDGE_FALL, true, &fallingEdgeHandler);
+
+    // "Starting" the capture is done by waiting until the BREAK-detect-timer
+    // fired for the first time
 
     _frame_finished = false;
 
