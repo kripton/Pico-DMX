@@ -8,18 +8,20 @@
 .program DmxInput
 .define dmx_bit 4                     ; As DMX has a baudrate of 250.000kBaud, a single bit is 4us
 
+.side_set 1                           ; For debugging
+
 wait_for_mab:
-    wait 1 pin 0                      ; Stall until line goes high for the Mark-After-Break (MAB) 
+    wait 1 pin 0   side 0                   ; Stall until line goes high for the Mark-After-Break (MAB) 
 
 .wrap_target
-    wait 0 pin 0                      ; Stall until start bit is asserted
-    set x, 7             [dmx_bit]    ; Preload bit counter, then delay until halfway through
+    wait 0 pin 0   side 1                   ; Stall until start bit is asserted
+    set x, 7       side 1      [dmx_bit]    ; Preload bit counter, then delay until halfway through
 
 bitloop:
-    in pins, 1                        ; Shift data bit into ISR
-    jmp x-- bitloop      [dmx_bit-2]  ; Loop 8 times, each loop iteration is 4us
-    wait 1 pin 0                      ; Wait for pin to go high for stop bits
-    in NULL, 24                       ; Push 24 more bits into the ISR so that our one byte is at the position where the DMA expects it
-    push                              ; Should probably do error checking on the stop bits some time in the future....
+    in pins, 1      side 1                  ; Shift data bit into ISR
+    jmp x-- bitloop side 1     [dmx_bit-2]  ; Loop 8 times, each loop iteration is 4us
+    wait 1 pin 0    side 1                  ; Wait for pin to go high for stop bits
+    in NULL, 24     side 1                  ; Push 24 more bits into the ISR so that our one byte is at the position where the DMA expects it
+    push            side 1                  ; Should probably do error checking on the stop bits some time in the future....
 
 .wrap

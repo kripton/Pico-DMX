@@ -14,16 +14,16 @@
 #define DmxInputInverted_wrap 8
 
 static const uint16_t DmxInputInverted_program_instructions[] = {
-    0x2020, //  0: wait   0 pin, 0
+    0x2020, //  0: wait   0 pin, 0        side 0     
             //     .wrap_target
-    0x20a0, //  1: wait   1 pin, 0
-    0xe427, //  2: set    x, 7                   [4]
-    0x4001, //  3: in     pins, 1
-    0x0243, //  4: jmp    x--, 3                 [2]
-    0x2020, //  5: wait   0 pin, 0
-    0xa0ce, //  6: mov    isr, !isr
-    0x4078, //  7: in     null, 24
-    0x8020, //  8: push   block
+    0x30a0, //  1: wait   1 pin, 0        side 1     
+    0xf427, //  2: set    x, 7            side 1 [4] 
+    0x5001, //  3: in     pins, 1         side 1     
+    0x1243, //  4: jmp    x--, 3          side 1 [2] 
+    0x3020, //  5: wait   0 pin, 0        side 1     
+    0xb0ce, //  6: mov    isr, !isr       side 1     
+    0x5078, //  7: in     null, 24        side 1     
+    0x9020, //  8: push   block           side 1     
             //     .wrap
 };
 
@@ -37,6 +37,7 @@ static const struct pio_program DmxInputInverted_program = {
 static inline pio_sm_config DmxInputInverted_program_get_default_config(uint offset) {
     pio_sm_config c = pio_get_default_sm_config();
     sm_config_set_wrap(&c, offset + DmxInputInverted_wrap_target, offset + DmxInputInverted_wrap);
+    sm_config_set_sideset(&c, 1, false, false);
     return c;
 }
 #endif

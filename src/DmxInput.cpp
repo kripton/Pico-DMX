@@ -70,6 +70,9 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     pio_gpio_init(pio, pin);
     gpio_pull_up(pin);
 
+    pio_sm_set_consecutive_pindirs(pio, sm, 21, 1, true);
+    pio_gpio_init(pio, 21);
+
     // Generate the default PIO state machine config provided by pioasm
     pio_sm_config sm_conf;
     if(!inverted) {
@@ -79,6 +82,7 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     }
     sm_config_set_in_pins(&sm_conf, pin); // for WAIT, IN
     sm_config_set_jmp_pin(&sm_conf, pin); // for JMP
+    sm_config_set_sideset_pins(&sm_conf, 21); // DEBUGGING
 
     // Setup the side-set pins for the PIO state machine
     // Shift to right, autopush disabled
@@ -137,7 +141,7 @@ void DmxInput::read(volatile uint8_t *buffer)
     dma_channel_acknowledge_irq0(_dma_chan);
 }
 
-void __isr endOfFrameCommonHandler(volatile DmxInput* instance) {
+void __isr endOfFrameCommonHandler(volatile DmxInput* instance, bool callUserspace) {
     // num_channels have been received OR BREAK-detect timer has fired!
     // * cancel the input's BREAK-detect timer. A new one will be created on
     //   the first falling edge from now (= end of MAB)
@@ -149,9 +153,6 @@ void __isr endOfFrameCommonHandler(volatile DmxInput* instance) {
     gpio_put(PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER, 1);
 #endif
 
-    // Stop the BREAK-detect timer
-    cancel_alarm(instance->_alarm_id);
-
     // Make sure sync-wrapper stops waiting
     instance->_frame_finished = true;
 
@@ -162,8 +163,9 @@ void __isr endOfFrameCommonHandler(volatile DmxInput* instance) {
     // contains the address to be written NEXT)
     instance->_channels_captured = (dma_hw->ch[instance->_dma_chan].write_addr - (uint32_t)instance->_buf) - 2;
 
-    // Trigger the callback if we have one
-    if (instance->_cb != nullptr) {
+    // Trigger the callback if we have one and it hasn't been called before
+    // (Happens when only 20 should be captured and BREAK was detected after 500)
+    if ((instance->_cb != nullptr) && callUserspace) {
         (*(instance->_cb))((DmxInput*)instance);
     }
 
@@ -173,6 +175,13 @@ void __isr endOfFrameCommonHandler(volatile DmxInput* instance) {
 }
 
 void __isr dmxinput_dma_handler() {
+    // The number of channels configured has been captured:
+    // * Calculate number of frames actually captured
+    // * Tell userspace that the frame capturing is finished
+    // * Call the callback handler if there is one
+    // * Do NOT stop the BREAK-detect timer!
+    // * TODO: Does the DMA automatically stay stopped?
+
     // Loop through all available DMA channels to find the instance of
     // DmxInput that just triggered
     for (int i = 0; i < NUM_DMA_CHANS; i++) {
@@ -183,12 +192,43 @@ void __isr dmxinput_dma_handler() {
             dma_hw->ints0 = 1u << i; // Reset the interrupt
             volatile DmxInput *instance = active_inputs[i];
 
-            endOfFrameCommonHandler(instance);
+            endOfFrameCommonHandler(instance, true);
 #ifdef PIN_DEBUG_INPUT_DMA_HANDLER
     gpio_put(PIN_DEBUG_INPUT_DMA_HANDLER, 0);
 #endif
         }
     }
+}
+
+void setupAndStartDMA(volatile DmxInput* instance) {
+    //setup dma
+    dma_channel_config cfg = dma_channel_get_default_config(instance->_dma_chan);
+
+    // Reading from constant address, writing to incrementing byte addresses
+    channel_config_set_transfer_data_size(&cfg, DMA_SIZE_8);
+    channel_config_set_read_increment(&cfg, false);
+    channel_config_set_write_increment(&cfg, true);
+
+    // Pace transfers based on DREQ_PIO0_RX0 (or whichever pio and sm we are using)
+    channel_config_set_dreq(&cfg, pio_get_dreq(instance->_pio, instance->_sm, false));
+
+    dma_channel_configure(
+        instance->_dma_chan,
+        &cfg,
+        NULL,             // dst
+        &instance->_pio->rxf[instance->_sm],  // src
+        DMXINPUT_BUFFER_SIZE(instance->_num_channels),  // transfer count,
+        false
+    );
+
+    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true);
+    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
+    pio_sm_clear_fifos(instance->_pio, instance->_sm);
+    dma_channel_set_irq0_enabled(instance->_dma_chan, true);
+
+    irq_set_enabled(DMA_IRQ_0, true);
+
+    pio_sm_set_enabled(instance->_pio, instance->_sm, true);
 }
 
 int64_t __isr breakDetectAlarmHandler(alarm_id_t id, void *user_data) {
@@ -210,18 +250,22 @@ int64_t __isr breakDetectAlarmHandler(alarm_id_t id, void *user_data) {
     gpio_put(PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED, 1);
 #endif
 
-    endOfFrameCommonHandler(instance);
+    // _frame_finished tells us at this point if the DMA IRQ already triggered
+    // (value is TRUE) or if more channels were expected but BREAK-detect hit
+    // (value is FALSE)
 
-    // Reset the state machine so it waits for the next MAB
-    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true); // Does is reset the counter so it re-counts "transfer size"?
-    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
-    pio_sm_clear_fifos(instance->_pio, instance->_sm);
+    endOfFrameCommonHandler(instance, !(instance->_frame_finished));
+
+    // TODO: Where do we set a new BREAK-detect timer?
+    // => Automatically in the fallingEdge IRQ handler!
+
+    setupAndStartDMA(instance);
 
 #ifdef PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED
     gpio_put(PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED, 0);
 #endif
 
-    // Do not re-schedule the alarm
+    // Do not re-schedule the alarm, it will be re-scheduled on falling edge
     return 0;
 }
 
@@ -261,32 +305,20 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     // Reset the PIO state machine to a consistent state. Clear the buffers and registers
     pio_sm_restart(_pio, _sm);
 
-    //setup dma
-    dma_channel_config cfg = dma_channel_get_default_config(_dma_chan);
 
-    // Reading from constant address, writing to incrementing byte addresses
-    channel_config_set_transfer_data_size(&cfg, DMA_SIZE_8);
-    channel_config_set_read_increment(&cfg, false);
-    channel_config_set_write_increment(&cfg, true);
 
-    // Pace transfers based on DREQ_PIO0_RX0 (or whichever pio and sm we are using)
-    channel_config_set_dreq(&cfg, pio_get_dreq(_pio, _sm, false));
 
-    //channel_config_set_ring(&cfg, true, 5);
-    dma_channel_configure(
-        _dma_chan, 
-        &cfg,
-        NULL,    // dst
-        &_pio->rxf[_sm],  // src
-        DMXINPUT_BUFFER_SIZE(_num_channels),  // transfer count,
-        false
-    );
+
+
+
+
+
 
     // Set up an interrupt handler that is fired as soon as the
     // DMA channel reaches its transfer count
-    dma_channel_set_irq0_enabled(_dma_chan, true);
+    //dma_channel_set_irq0_enabled(_dma_chan, false);
     irq_set_exclusive_handler(DMA_IRQ_0, dmxinput_dma_handler);
-    irq_set_enabled(DMA_IRQ_0, true);
+    irq_set_enabled(DMA_IRQ_0, false);
 
     // Set up a BREAK-detect-timer that RINGs after 88us (after the last falling edge)
     _alarm_id = add_alarm_in_us(88, breakDetectAlarmHandler, this, false);
@@ -298,8 +330,6 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     // fired for the first time
 
     _frame_finished = false;
-
-    pio_sm_set_enabled(_pio, _sm, true);
 }
 
 uint DmxInput::pin() {

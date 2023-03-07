@@ -31,12 +31,12 @@
 class DmxInput
 {
     uint _pin;
-    int32_t _num_channels;
 
 public:
     /*
     private properties that are declared public so the interrupt handler has access
     */
+    volatile int32_t _num_channels;
     volatile uint8_t *_buf;
     volatile PIO _pio;
     volatile uint _sm;
