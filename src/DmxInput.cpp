@@ -70,6 +70,8 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     pio_gpio_init(pio, pin);
     gpio_pull_up(pin);
 
+    // For Debugging: side set this pin to 1 if we saw the MAB
+    // Is set to 0 while waiting for the MAB (start of program)
     pio_sm_set_consecutive_pindirs(pio, sm, 21, 1, true);
     pio_gpio_init(pio, 21);
 
@@ -81,7 +83,6 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
         sm_conf = DmxInputInverted_program_get_default_config(prgm_offsets[pio_ind]);
     }
     sm_config_set_in_pins(&sm_conf, pin); // for WAIT, IN
-    sm_config_set_jmp_pin(&sm_conf, pin); // for JMP
     sm_config_set_sideset_pins(&sm_conf, 21); // DEBUGGING
 
     // Setup the side-set pins for the PIO state machine
@@ -94,11 +95,9 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
     uint clk_div = clock_get_hz(clk_sys) / DMX_SM_FREQ;
     sm_config_set_clkdiv(&sm_conf, clk_div);
 
-    // Load our configuration, jump to the start of the program and run the State Machine
+    // Load our configuration, jump to the start of the program and wait there
+    // The state machine will be started in the next BREAK
     pio_sm_init(pio, sm, prgm_offsets[pio_ind], &sm_conf);
-    //sm_config_set_in_shift(&c, true, false, n_bits)
-
-    //pio_sm_put_blocking(pio, sm, (start_channel + num_channels) - 1);
 
     _pio = pio;
     _sm = sm;
@@ -159,9 +158,12 @@ void __isr endOfFrameCommonHandler(volatile DmxInput* instance, bool callUserspa
     // Calculate how many channels have been recorded:
     // Get the DMA-channels's WRITE-ADDR and subtract the instance's
     // buffer address since it began writing there.
-    // Finally, subtract 2 (one for the start channel, one since WRITE-ADDR
-    // contains the address to be written NEXT)
-    instance->_channels_captured = (dma_hw->ch[instance->_dma_chan].write_addr - (uint32_t)instance->_buf) - 2;
+    // Finally, subtract 1 (for the start code)
+    instance->_channels_captured = (dma_hw->ch[instance->_dma_chan].write_addr - (uint32_t)instance->_buf) - 1;
+
+    // TODO: If fewer channels have been captured than requested,
+    //       the DMA IRQ has not yet been fired and userspace has not yet been
+    //       called. If so, do that now
 
     // Trigger the callback if we have one and it hasn't been called before
     // (Happens when only 20 should be captured and BREAK was detected after 500)
@@ -192,6 +194,14 @@ void __isr dmxinput_dma_handler() {
             dma_hw->ints0 = 1u << i; // Reset the interrupt
             volatile DmxInput *instance = active_inputs[i];
 
+            // Stop the DMA transfer. It will be started at next BREAK
+            // disable the channel on IRQ0
+            dma_channel_set_irq0_enabled(instance->_dma_chan, false);
+            // abort the channel
+            dma_channel_abort(instance->_dma_chan);
+            // clear the spurious IRQ (if there was one)
+            dma_channel_acknowledge_irq0(instance->_dma_chan);
+
             endOfFrameCommonHandler(instance, true);
 #ifdef PIN_DEBUG_INPUT_DMA_HANDLER
     gpio_put(PIN_DEBUG_INPUT_DMA_HANDLER, 0);
@@ -201,6 +211,9 @@ void __isr dmxinput_dma_handler() {
 }
 
 void setupAndStartDMA(volatile DmxInput* instance) {
+    // Reset the PIO state machine to a consistent state. Clear the buffers and registers
+    pio_sm_restart(instance->_pio, instance->_sm);
+
     //setup dma
     dma_channel_config cfg = dma_channel_get_default_config(instance->_dma_chan);
 
@@ -217,16 +230,26 @@ void setupAndStartDMA(volatile DmxInput* instance) {
         &cfg,
         NULL,             // dst
         &instance->_pio->rxf[instance->_sm],  // src
-        DMXINPUT_BUFFER_SIZE(instance->_num_channels),  // transfer count,
+        (instance->_num_channels) + 1,  // transfer count,
         false
     );
 
-    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true);
+    // Set write address but don't start just yet. Wait for the first fallingEdge
+
+    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, false);
     pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
     pio_sm_clear_fifos(instance->_pio, instance->_sm);
     dma_channel_set_irq0_enabled(instance->_dma_chan, true);
 
+    dma_channel_acknowledge_irq0(instance->_dma_chan);
     irq_set_enabled(DMA_IRQ_0, true);
+
+            dma_channel_set_trans_count(instance->_dma_chan, (instance->_num_channels) + 1, false);
+
+    instance->_dma_running = false;
+#ifdef PIN_DEBUG_INPUT_DMA_RUNNING
+    gpio_put(PIN_DEBUG_INPUT_DMA_RUNNING, 0);
+#endif
 
     pio_sm_set_enabled(instance->_pio, instance->_sm, true);
 }
@@ -283,6 +306,18 @@ void __isr fallingEdgeHandler(uint gpio, uint32_t events) {
     gpio_put(PIN_DEBUG_INPUT_TIMER_RESET, 1);
 #endif
 
+    // Start the DMA transfer from the SM to the buffer
+    // Do this only when the DMA is not yet running. Otherwise, it will
+    // trigger the IRQ immediately
+    if (!instance->_dma_running) {
+        dma_channel_set_trans_count(instance->_dma_chan, (instance->_num_channels) + 1, true);
+        //dma_channel_start(instance->_dma_chan);
+        instance->_dma_running = true;
+#ifdef PIN_DEBUG_INPUT_DMA_RUNNING
+    gpio_put(PIN_DEBUG_INPUT_DMA_RUNNING, 1);
+#endif
+    }
+
     // Stop the currently running BREAK detect timer
     bool canceled = cancel_alarm(instance->_alarm_id);
     // Start a new timer RINGing after 88us from NOW
@@ -302,15 +337,6 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
 
     pio_sm_set_enabled(_pio, _sm, false);
 
-    // Reset the PIO state machine to a consistent state. Clear the buffers and registers
-    pio_sm_restart(_pio, _sm);
-
-
-
-
-
-
-
 
 
 
@@ -324,7 +350,14 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     _alarm_id = add_alarm_in_us(88, breakDetectAlarmHandler, this, false);
 
     // Set up a "falling edge" interrupt for our GPIO
+    // TODO: Do this in ::begin() ?
     gpio_set_irq_enabled_with_callback(_pin, GPIO_IRQ_EDGE_FALL, true, &fallingEdgeHandler);
+    
+    // Give the "falling edge" GPIO IRQ a slightly higher prio (= lower number)
+    // than the default 0x80. Needed since resetting the timer before the alarm
+    // fires is crucial and also the IRQ handler should be pretty short
+    // (~5µs at default clock)
+    irq_set_priority(IO_IRQ_BANK0, 0x60);
 
     // "Starting" the capture is done by waiting until the BREAK-detect-timer
     // fired for the first time

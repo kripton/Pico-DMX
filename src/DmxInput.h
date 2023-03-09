@@ -12,6 +12,7 @@
 #define PIN_DEBUG_INPUT_BREAK_DETECT_ALARM_FIRED 17
 #define PIN_DEBUG_INPUT_END_OF_FRAME_COMMON_HANDLER 19
 #define PIN_DEBUG_INPUT_DMA_HANDLER 20
+#define PIN_DEBUG_INPUT_DMA_RUNNING 22
 
 #if defined(ARDUINO_ARCH_MBED)
   #include <dma.h>
@@ -44,6 +45,7 @@ public:
     volatile bool _frame_finished = 0;
     volatile alarm_id_t _alarm_id;      // ID of the BREAK-detect alarm
     volatile uint32_t _channels_captured;
+    volatile bool _dma_running;
     void (*_cb)(DmxInput*);
 
     /*
