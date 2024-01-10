@@ -1,0 +1,58 @@
+; Author: Jostein Løwer, github: jostlowe
+; SPDX-License-Identifier: BSD-3-Clause
+; 
+; PIO program for inputting the DMX lighting protocol.
+; (Almost) compliant with ANSI E1.11-2008 (R2018)
+; The program assumes a PIO clock frequency of exactly 2MHz
+
+.program DmxInput
+; As DMX has a baudrate of 250.000kBaud, a single bit is 4us = 8 clock cycles at 2MHz
+.side_set 1 opt
+
+    nop side 0
+restart:
+
+break_reset:
+    set x, 28                         ; Setup a counter to count the iterations on break_loop
+
+break_loop:                           ; Break loop lasts for 3us. The entire break must be minimum 29*3us = 87us
+    jmp pin break_reset               ; Go back to start if pin goes high during the break
+    jmp x-- break_loop   [4]          ; Decrease the counter and go back to break loop if x>0 so that the break is not done
+    wait 1 pin 0                     ; Stall until line goes high for the Mark-After-Break (MAB) 
+    wait 0 pin 0                      ; The first time around we can stall for the start bit
+    jmp start_found [2]
+
+start_of_byte:
+.wrap_target
+    set y, 5
+start_bit_outer_loop:
+    set x, 15   side 0
+start_bit_loop:
+    jmp pin loop1
+    jmp start_found     [1]
+loop1:
+    jmp x-- start_bit_loop
+    jmp y-- start_bit_outer_loop
+    jmp end_of_frame   side 1           ; Timeout the wait for start bit after about 100uS
+start_found:
+    set x, 7    [7]            ; Preload bit counter, then delay until halfway through
+
+bitloop:
+    in pins, 1  side 1                      ; Shift data bit into ISR
+    jmp x-- bitloop      [6]  ; Loop 8 times, each loop iteration is 4us
+
+    jmp pin stop_good_1 side 0  [6]  ; Read the first stop bit, jump if it's good
+    jmp bad_stop
+stop_good_1:
+    in NULL, 24                     ; Push 24 more bits into the ISR so that our one byte is at the position where the DMA expects it
+    jmp pin stop_good_2      ; Read the second stop bit, jump if it's good
+    jmp bad_stop
+stop_good_2:
+    push side 1                     ; Push the data
+.wrap
+
+end_of_frame:
+    irq 1                             ; Signal that we have a frame with less than 513 bytes
+bad_stop:
+    wait 1 pin 0      side 0                ; and wait for line to return to idle state.
+    jmp restart

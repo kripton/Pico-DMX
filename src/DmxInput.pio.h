@@ -12,51 +12,49 @@
 // DmxInput //
 // -------- //
 
-#define DmxInput_wrap_target 7
-#define DmxInput_wrap 22
+#define DmxInput_wrap_target 6
+#define DmxInput_wrap 21
 
 static const uint16_t DmxInput_program_instructions[] = {
-    0xb042, //  0: nop                    side 0     
-    0xe03c, //  1: set    x, 28                      
-    0x00c1, //  2: jmp    pin, 1                     
-    0x0442, //  3: jmp    x--, 2                 [4] 
-    0x20a0, //  4: wait   1 pin, 0                   
-    0x2020, //  5: wait   0 pin, 0                   
-    0x020e, //  6: jmp    14                     [2] 
+    0xe03c, //  0: set    x, 28                      
+    0x00c0, //  1: jmp    pin, 0                     
+    0x0441, //  2: jmp    x--, 1                 [4] 
+    0x20a0, //  3: wait   1 pin, 0                   
+    0x2020, //  4: wait   0 pin, 0                   
+    0x020d, //  5: jmp    13                     [2] 
             //     .wrap_target
-    0xe045, //  7: set    y, 5                       
-    0xf02f, //  8: set    x, 15           side 0     
-    0x00cb, //  9: jmp    pin, 11                    
-    0x010e, // 10: jmp    14                     [1] 
-    0x0049, // 11: jmp    x--, 9                     
-    0x0088, // 12: jmp    y--, 8                     
-    0x1817, // 13: jmp    23              side 1     
-    0xe727, // 14: set    x, 7                   [7] 
-    0x5801, // 15: in     pins, 1         side 1     
-    0x064f, // 16: jmp    x--, 15                [6] 
-    0x16d3, // 17: jmp    pin, 19         side 0 [6] 
-    0x0018, // 18: jmp    24                         
-    0x4078, // 19: in     null, 24                   
-    0x00d6, // 20: jmp    pin, 22                    
-    0x0018, // 21: jmp    24                         
-    0x9820, // 22: push   block           side 1     
+    0xe045, //  6: set    y, 5                       
+    0xe02f, //  7: set    x, 15                      
+    0x00ca, //  8: jmp    pin, 10                    
+    0x010d, //  9: jmp    13                     [1] 
+    0x0048, // 10: jmp    x--, 8                     
+    0x0087, // 11: jmp    y--, 7                     
+    0x0016, // 12: jmp    22                         
+    0xe727, // 13: set    x, 7                   [7] 
+    0x4001, // 14: in     pins, 1                    
+    0x064e, // 15: jmp    x--, 14                [6] 
+    0x06d2, // 16: jmp    pin, 18                [6] 
+    0x0017, // 17: jmp    23                         
+    0x4078, // 18: in     null, 24                   
+    0x00d5, // 19: jmp    pin, 21                    
+    0x0017, // 20: jmp    23                         
+    0x8020, // 21: push   block                      
             //     .wrap
-    0xc001, // 23: irq    nowait 1                   
-    0x30a0, // 24: wait   1 pin, 0        side 0     
-    0x0001, // 25: jmp    1                          
+    0xc001, // 22: irq    nowait 1                   
+    0x20a0, // 23: wait   1 pin, 0                   
+    0x0000, // 24: jmp    0                          
 };
 
 #if !PICO_NO_HARDWARE
 static const struct pio_program DmxInput_program = {
     .instructions = DmxInput_program_instructions,
-    .length = 26,
+    .length = 25,
     .origin = -1,
 };
 
 static inline pio_sm_config DmxInput_program_get_default_config(uint offset) {
     pio_sm_config c = pio_get_default_sm_config();
     sm_config_set_wrap(&c, offset + DmxInput_wrap_target, offset + DmxInput_wrap);
-    sm_config_set_sideset(&c, 2, true, false);
     return c;
 }
 #endif
