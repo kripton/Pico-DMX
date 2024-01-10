@@ -1,5 +1,5 @@
 // Debug defines
-#define SIDESTEP_PIN 6
+//#define SIDESTEP_PIN 6
 //#define DEBUG_PRINT
 
 /*
