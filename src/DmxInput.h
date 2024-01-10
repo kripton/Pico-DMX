@@ -20,24 +20,24 @@
 #endif
 
 #define DMX_UNIVERSE_SIZE 512
-#define DMX_SM_FREQ 1000000
+#define DMX_SM_FREQ_INPUT 2000000
 
-#define DMXINPUT_BUFFER_SIZE(start_channel, num_channels) (num_channels+1)
+#define DMXINPUT_BUFFER_SIZE(num_channels) (num_channels+1)
 class DmxInput
 {
     uint _pin;
-    int32_t _start_channel;
-    int32_t _num_channels;
 
 public:
     /*
     private properties that are declared public so the interrupt handler has access
     */
+    int32_t _num_channels;
     volatile uint8_t *_buf;
     volatile PIO _pio;
     volatile uint _sm;
     volatile uint _dma_chan;
     volatile unsigned long _last_packet_timestamp=0;
+    volatile uint32_t _last_packet_length=0; 
     void (*_cb)(DmxInput*);
     /*
         All different return codes for the DMX class. Only the SUCCESS
@@ -54,7 +54,9 @@ public:
 
         // There is not enough program memory left in the PIO to fit
         // The DMX PIO program
-        ERR_INSUFFICIENT_PRGM_MEM = -2
+        ERR_INSUFFICIENT_PRGM_MEM = -2,
+
+        ERR_UNKNOWN = -100
     };
 
     /*
@@ -69,7 +71,7 @@ public:
        run 3 more on pio1  
     */
 
-    return_code begin(uint pin, uint start_channel, uint num_channels, PIO pio = pio0, bool inverted = false);
+    return_code begin(uint pin, uint num_channels, PIO pio = pio0);
 
     /*
         Read the selected channels from .begin(...) into a buffer.
@@ -96,6 +98,8 @@ public:
         May be used to detect if the dmx signal has stopped coming in.
     */
     unsigned long latest_packet_timestamp();
+
+    uint32_t latest_packet_length();
 
     /*
         Get the pin this instance is listening on

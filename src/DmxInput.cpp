@@ -1,3 +1,7 @@
+// Debug defines
+#define SIDESTEP_PIN 6
+//#define DEBUG_PRINT
+
 /*
  * Copyright (c) 2021 Jostein Løwer 
  *
@@ -6,7 +10,9 @@
 
 #include "DmxInput.h"
 #include "DmxInput.pio.h"
-#include "DmxInputInverted.pio.h"
+#if DEBUG_PRINT
+#include <stdio.h>
+#endif
 
 #if defined(ARDUINO_ARCH_MBED)
   #include <clocks.h>
@@ -27,26 +33,56 @@ The interrupt handler has only the ints0 register to go on, so this array needs 
 #define NUM_DMA_CHANS 12
 volatile DmxInput *active_inputs[NUM_DMA_CHANS] = {nullptr};
 
-DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_channels, PIO pio, bool inverted)
+static void startTransfer(volatile DmxInput *instance)
+{
+    dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true);
+    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
+    pio_sm_clear_fifos(instance->_pio, instance->_sm);
+}
+
+static void dmxinput_pio_irq_handler()
+{
+    // Check all instances, could be improved
+    for(int i=0;i<NUM_DMA_CHANS;i++) {
+        if(active_inputs[i]!=nullptr) {
+            volatile DmxInput *instance = active_inputs[i];
+
+            if(!pio_interrupt_get(instance->_pio, 1))
+                continue;
+
+            // Capture the transfer count before we abort the dma transfer.
+            // Because we're waiting for the interslot delay (about 50uS) it's
+            // essentially guaranteed that the DMA has finished transferring
+            // all the bytes, so we shouldn't have any race conditions here.
+            uint32_t transferCount = (instance->_num_channels + 1) - dma_hw->ch[i].transfer_count;
+#if DEBUG_PRINT
+            printf("**Packet len = %u\n", transferCount);
+#endif
+            instance->_last_packet_length = transferCount;
+
+            // Abort the dma transfer. Note that this will trigger the dma IRQ, but
+            // that's a good thing as it will also restart the transfer for the next packet.
+            dma_channel_abort(i);
+
+            // Clear interrupt
+            pio_interrupt_clear(instance->_pio, 1);
+            break;
+        }
+    }
+}
+
+DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
 {
     uint pio_ind = pio_get_index(pio);
     if(!prgm_loaded[pio_ind]) {
         /* 
         Attempt to load the DMX PIO assembly program into the PIO program memory
         */
-       if(!inverted) {
         if (!pio_can_add_program(pio, &DmxInput_program))
         {
             return ERR_INSUFFICIENT_PRGM_MEM;
         }
         prgm_offsets[pio_ind] = pio_add_program(pio, &DmxInput_program);
-       } else {
-        if (!pio_can_add_program(pio, &DmxInputInverted_program))
-        {
-            return ERR_INSUFFICIENT_PRGM_MEM;
-        }
-        prgm_offsets[pio_ind] = pio_add_program(pio, &DmxInputInverted_program);
-       }
 
         prgm_loaded[pio_ind] = true;
     }
@@ -63,45 +99,66 @@ DmxInput::return_code DmxInput::begin(uint pin, uint start_channel, uint num_cha
 
     // Set this pin's GPIO function (connect PIO to the pad)
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+#if defined(SIDESTEP_PIN)
+    // For debugging the PIO code
+    pio_sm_set_consecutive_pindirs(pio, sm, SIDESTEP_PIN, 1, true);
+    pio_gpio_init(pio, SIDESTEP_PIN);
+#endif
     pio_gpio_init(pio, pin);
     gpio_pull_up(pin);
 
     // Generate the default PIO state machine config provided by pioasm
     pio_sm_config sm_conf;
-    if(!inverted) {
-        sm_conf = DmxInput_program_get_default_config(prgm_offsets[pio_ind]);
-    } else {
-        sm_conf = DmxInputInverted_program_get_default_config(prgm_offsets[pio_ind]);
-    }
+    sm_conf = DmxInput_program_get_default_config(prgm_offsets[pio_ind]);
+
     sm_config_set_in_pins(&sm_conf, pin); // for WAIT, IN
     sm_config_set_jmp_pin(&sm_conf, pin); // for JMP
 
-    // Setup the side-set pins for the PIO state machine
     // Shift to right, autopush disabled
     sm_config_set_in_shift(&sm_conf, true, false, 8);
     // Deeper FIFO as we're not doing any TX
     sm_config_set_fifo_join(&sm_conf, PIO_FIFO_JOIN_RX);
 
-    // Setup the clock divider to run the state machine at exactly 1MHz
-    uint clk_div = clock_get_hz(clk_sys) / DMX_SM_FREQ;
+    // Setup the clock divider to run the state machine at exactly 2MHz
+    uint clk_div = clock_get_hz(clk_sys) / DMX_SM_FREQ_INPUT;
     sm_config_set_clkdiv(&sm_conf, clk_div);
 
     // Load our configuration, jump to the start of the program and run the State Machine
     pio_sm_init(pio, sm, prgm_offsets[pio_ind], &sm_conf);
-    //sm_config_set_in_shift(&c, true, false, n_bits)
 
-    //pio_sm_put_blocking(pio, sm, (start_channel + num_channels) - 1);
+#if defined(SIDESTEP_PIN)
+    pio_sm_set_sideset_pins(pio, sm, 6);
+#endif
+
+    if (pio_ind == 0)
+    {
+        // set the IRQ handler
+        irq_set_exclusive_handler(PIO0_IRQ_0, dmxinput_pio_irq_handler);
+        // enable the IRQ
+        irq_set_enabled(PIO0_IRQ_0, true);
+        //TODO: SM0 and SM1?
+        pio0_hw->inte0 = PIO_IRQ0_INTE_SM0_BITS | PIO_IRQ0_INTE_SM1_BITS;
+    }
+    else
+    {
+        // set the IRQ handler
+        irq_set_exclusive_handler(PIO1_IRQ_0, dmxinput_pio_irq_handler);
+        // enable the IRQ
+        irq_set_enabled(PIO1_IRQ_0, true);
+        //TODO: SM0 and SM1?
+        pio1_hw->inte0 = PIO_IRQ0_INTE_SM0_BITS | PIO_IRQ0_INTE_SM1_BITS;
+    }
 
     _pio = pio;
     _sm = sm;
     _pin = pin;
-    _start_channel = start_channel;
     _num_channels = num_channels;
     _buf = nullptr;
     _cb = nullptr;
+    // Default for when a full frame has been received
+    _last_packet_length = _num_channels + 1;
 
     _dma_chan = dma_claim_unused_channel(true);
-
 
     if (active_inputs[_dma_chan] != nullptr) {
         return ERR_NO_SM_AVAILABLE;
@@ -127,9 +184,12 @@ void dmxinput_dma_handler() {
         if(active_inputs[i]!=nullptr && (dma_hw->ints0 & (1u<<i))) {
             dma_hw->ints0 = 1u << i;
             volatile DmxInput *instance = active_inputs[i];
-            dma_channel_set_write_addr(i, instance->_buf, true);
-            pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
-            pio_sm_clear_fifos(instance->_pio, instance->_sm);
+
+#if DEBUG_PRINT
+            printf("**Receive frame\n");
+#endif
+            startTransfer(instance);
+
 #ifdef ARDUINO
             instance->_last_packet_timestamp = millis();
 #else
@@ -139,9 +199,11 @@ void dmxinput_dma_handler() {
             if (instance->_cb != nullptr) {
                 (*(instance->_cb))((DmxInput*)instance);
             }
+
+            // Default the packet length to the full length
+            instance->_last_packet_length = instance->_num_channels + 1;
         }
     }
-    
 }
 
 void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)(DmxInput*)) {
@@ -173,7 +235,7 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
         &cfg,
         NULL,    // dst
         &_pio->rxf[_sm],  // src
-        DMXINPUT_BUFFER_SIZE(_start_channel, _num_channels),  // transfer count,
+        DMXINPUT_BUFFER_SIZE(_num_channels),  // transfer count,
         false
     );
 
@@ -182,9 +244,7 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     irq_set_enabled(DMA_IRQ_0, true);
 
     //aaand start!
-    dma_channel_set_write_addr(_dma_chan, buffer, true);
-    pio_sm_exec(_pio, _sm, pio_encode_jmp(prgm_offsets[pio_get_index(_pio)]));
-    pio_sm_clear_fifos(_pio, _sm);
+    startTransfer(this);
 #ifdef ARDUINO
     _last_packet_timestamp = millis();
 #else
@@ -196,6 +256,10 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
 
 unsigned long DmxInput::latest_packet_timestamp() {
     return _last_packet_timestamp;
+}
+
+uint32_t DmxInput::latest_packet_length() {
+    return _last_packet_length;
 }
 
 uint DmxInput::pin() {
