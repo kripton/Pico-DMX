@@ -24,8 +24,6 @@
   #include "hardware/irq.h"
 #endif
 
-bool prgm_loaded[] = {false,false};
-volatile uint prgm_offsets[] = {0,0};
 /*
 This array tells the interrupt handler which instance has interrupted.
 The interrupt handler has only the ints0 register to go on, so this array needs as many spots as there are DMA channels. 
@@ -36,7 +34,7 @@ volatile DmxInput *active_inputs[NUM_DMA_CHANS] = {nullptr};
 static void startTransfer(volatile DmxInput *instance)
 {
     dma_channel_set_write_addr(instance->_dma_chan, instance->_buf, true);
-    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(prgm_offsets[pio_get_index(instance->_pio)]));
+    pio_sm_exec(instance->_pio, instance->_sm, pio_encode_jmp(instance->_offset));
     pio_sm_clear_fifos(instance->_pio, instance->_sm);
 }
 
@@ -47,7 +45,7 @@ static void dmxinput_pio_irq_handler()
         if (active_inputs[i] != nullptr) {
             volatile DmxInput *instance = active_inputs[i];
 
-            if(!pio_interrupt_get(instance->_pio, 1)) {
+            if (!pio_interrupt_get(instance->_pio, 1)) {
                 continue;
             }
 
@@ -72,10 +70,10 @@ static void dmxinput_pio_irq_handler()
     }
 }
 
-DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
+DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio, int preLoadedOffset)
 {
     uint pio_ind = pio_get_index(pio);
-    if (!prgm_loaded[pio_ind]) {
+    if (preLoadedOffset < 0) {
         /* 
         Attempt to load the DMX PIO assembly program into the PIO program memory
         */
@@ -83,15 +81,16 @@ DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
         {
             return ERR_INSUFFICIENT_PRGM_MEM;
         }
-        prgm_offsets[pio_ind] = pio_add_program(pio, &DmxInput_program);
-
-        prgm_loaded[pio_ind] = true;
+        _offset = pio_add_program(pio, &DmxInput_program);
+        _preloaded = false;
+    } else {
+        _offset = -preLoadedOffset;
+        _preloaded = true;
     }
 
     /* 
     Attempt to claim an unused State Machine into the PIO program memory
     */
-
     int sm = pio_claim_unused_sm(pio, false);
     if (sm == -1)
     {
@@ -110,7 +109,7 @@ DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
 
     // Generate the default PIO state machine config provided by pioasm
     pio_sm_config sm_conf;
-    sm_conf = DmxInput_program_get_default_config(prgm_offsets[pio_ind]);
+    sm_conf = DmxInput_program_get_default_config(_offset);
 
     sm_config_set_in_pins(&sm_conf, pin); // for WAIT, IN
     sm_config_set_jmp_pin(&sm_conf, pin); // for JMP
@@ -125,7 +124,7 @@ DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
     sm_config_set_clkdiv(&sm_conf, clk_div);
 
     // Load our configuration, jump to the start of the program and run the State Machine
-    pio_sm_init(pio, sm, prgm_offsets[pio_ind], &sm_conf);
+    pio_sm_init(pio, sm, _offset, &sm_conf);
 
 #if defined(SIDESTEP_PIN)
     pio_sm_set_sideset_pins(pio, sm, 6);
@@ -182,7 +181,7 @@ void DmxInput::read(volatile uint8_t *buffer)
 
 void dmxinput_dma_handler() {
     for (int i=0; i < NUM_DMA_CHANS; i++) {
-        if ((a0ctive_inputs[i] != nullptr) && (dma_hw->ints0 & (1u<<i))) {
+        if ((active_inputs[i] != nullptr) && (dma_hw->ints0 & (1u<<i))) {
             dma_hw->ints0 = 1u << i;
             volatile DmxInput *instance = active_inputs[i];
 
@@ -284,10 +283,8 @@ void DmxInput::end()
             break;
         }
     }
-    if (!inuse) {
-        prgm_loaded[pio_id] = false;
-        pio_remove_program(_pio, &DmxInput_program, prgm_offsets[pio_id]);
-        prgm_offsets[pio_id]=0;
+    if (!inuse && !_preloaded) {
+        pio_remove_program(_pio, &DmxInput_program, _offset);
     }
 
     // Unclaim the sm

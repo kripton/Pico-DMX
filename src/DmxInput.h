@@ -34,6 +34,8 @@ public:
     volatile uint8_t *_buf;
     volatile PIO _pio;
     volatile uint _sm;
+    volatile int _offset;
+    volatile bool _preloaded;
     volatile uint _dma_chan;
     volatile unsigned long _last_packet_timestamp = 0;
     volatile uint32_t _last_packet_length = 0;
@@ -59,17 +61,15 @@ public:
     };
 
     /*
-       Starts a new DMX input instance. 
+       Starts a new DMX input instance.
        
        Param: pin
        Any valid GPIO pin on the Pico
 
        Param: pio
-       defaults to pio0. pio0 can run up to 3
-       DMX input instances. If you really need more, you can
-       run 3 more on pio1  
+       defaults to pio0
     */
-    return_code begin(uint pin, uint num_channels, PIO pio = pio0);
+    return_code begin(uint pin, uint num_channels, PIO pio = pio0, int preLoadedOffset = -1);
 
     /*
         Read the selected channels from .begin(...) into a buffer.
