@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2021 Jostein Løwer 
  *
@@ -36,8 +35,8 @@ public:
     volatile PIO _pio;
     volatile uint _sm;
     volatile uint _dma_chan;
-    volatile unsigned long _last_packet_timestamp=0;
-    volatile uint32_t _last_packet_length=0; 
+    volatile unsigned long _last_packet_timestamp = 0;
+    volatile uint32_t _last_packet_length = 0;
     void (*_cb)(DmxInput*);
     /*
         All different return codes for the DMX class. Only the SUCCESS
@@ -70,7 +69,6 @@ public:
        DMX input instances. If you really need more, you can
        run 3 more on pio1  
     */
-
     return_code begin(uint pin, uint num_channels, PIO pio = pio0);
 
     /*

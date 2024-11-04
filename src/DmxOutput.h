@@ -63,7 +63,6 @@ public:
        DMX instances. If you really need more, you can
        run 4 more on pio1  
     */
-
     return_code begin(uint pin, PIO pio = pio0);
 
     /*
@@ -83,7 +82,6 @@ public:
         The number of bytes from the DMX frame that should be 
         transmitted 
     */
-
     void write(uint8_t *universe, uint length);
 
     /*
@@ -97,7 +95,6 @@ public:
         the current DMX frame. Returns immediately if no
         frame is currently being transmitted
     */
-
     // void await();
 
     /*

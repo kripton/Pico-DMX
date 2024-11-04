@@ -1,12 +1,12 @@
-// Debug defines
-//#define SIDESTEP_PIN 6
-//#define DEBUG_PRINT
-
 /*
  * Copyright (c) 2021 Jostein Løwer 
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
+
+// Debug defines
+//#define SIDESTEP_PIN 6
+//#define DEBUG_PRINT
 
 #include "DmxInput.h"
 #include "DmxInput.pio.h"
@@ -43,12 +43,13 @@ static void startTransfer(volatile DmxInput *instance)
 static void dmxinput_pio_irq_handler()
 {
     // Check all instances, could be improved
-    for(int i=0;i<NUM_DMA_CHANS;i++) {
-        if(active_inputs[i]!=nullptr) {
+    for (int i=0; i < NUM_DMA_CHANS; i++) {
+        if (active_inputs[i] != nullptr) {
             volatile DmxInput *instance = active_inputs[i];
 
-            if(!pio_interrupt_get(instance->_pio, 1))
+            if(!pio_interrupt_get(instance->_pio, 1)) {
                 continue;
+            }
 
             // Capture the transfer count before we abort the dma transfer.
             // Because we're waiting for the interslot delay (about 50uS) it's
@@ -74,7 +75,7 @@ static void dmxinput_pio_irq_handler()
 DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
 {
     uint pio_ind = pio_get_index(pio);
-    if(!prgm_loaded[pio_ind]) {
+    if (!prgm_loaded[pio_ind]) {
         /* 
         Attempt to load the DMX PIO assembly program into the PIO program memory
         */
@@ -170,18 +171,18 @@ DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio)
 
 void DmxInput::read(volatile uint8_t *buffer)
 {
-    if(_buf==nullptr) {
+    if (_buf == nullptr) {
         read_async(buffer);
     }
     unsigned long start = _last_packet_timestamp;
-    while(_last_packet_timestamp == start) {
+    while (_last_packet_timestamp == start) {
         tight_loop_contents();
     }
 }
 
 void dmxinput_dma_handler() {
-    for(int i=0;i<NUM_DMA_CHANS;i++) {
-        if(active_inputs[i]!=nullptr && (dma_hw->ints0 & (1u<<i))) {
+    for (int i=0; i < NUM_DMA_CHANS; i++) {
+        if ((a0ctive_inputs[i] != nullptr) && (dma_hw->ints0 & (1u<<i))) {
             dma_hw->ints0 = 1u << i;
             volatile DmxInput *instance = active_inputs[i];
 
@@ -207,9 +208,9 @@ void dmxinput_dma_handler() {
 }
 
 void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)(DmxInput*)) {
-
     _buf = buffer;
-    if (inputUpdatedCallback!=nullptr) {
+
+    if (inputUpdatedCallback != nullptr) {
         _cb = inputUpdatedCallback;
     }
 
@@ -218,7 +219,7 @@ void DmxInput::read_async(volatile uint8_t *buffer, void (*inputUpdatedCallback)
     // Reset the PIO state machine to a consistent state. Clear the buffers and registers
     pio_sm_restart(_pio, _sm);
 
-    //setup dma
+    // Setup DMA
     dma_channel_config cfg = dma_channel_get_default_config(_dma_chan);
 
     // Reading from constant address, writing to incrementing byte addresses
@@ -274,16 +275,16 @@ void DmxInput::end()
     // Remove the PIO DMX program from the PIO program memory
     uint pio_id = pio_get_index(_pio);
     bool inuse = false;
-    for(uint i=0;i<NUM_DMA_CHANS;i++) {
-        if(i==_dma_chan) {
+    for (uint i=0; i < NUM_DMA_CHANS; i++) {
+        if (i == _dma_chan) {
             continue;
         }
-        if(pio_id == pio_get_index(active_inputs[i]->_pio)) {
+        if (pio_id == pio_get_index(active_inputs[i]->_pio)) {
             inuse = true;
             break;
         }
     }
-    if(!inuse) {
+    if (!inuse) {
         prgm_loaded[pio_id] = false;
         pio_remove_program(_pio, &DmxInput_program, prgm_offsets[pio_id]);
         prgm_offsets[pio_id]=0;

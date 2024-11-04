@@ -33,7 +33,6 @@ DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
     Attempt to claim an unused State Machine 
     into the PIO program memory
     */
-
     int sm = pio_claim_unused_sm(pio, false);
     if (sm == -1)
     {
@@ -95,7 +94,6 @@ DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
 
 void DmxOutput::write(uint8_t *universe, uint length)
 {
-
     // Temporarily disable the PIO state machine
     pio_sm_set_enabled(_pio, _sm, false);
 
@@ -114,8 +112,9 @@ void DmxOutput::write(uint8_t *universe, uint length)
 
 bool DmxOutput::busy()
 {
-    if (dma_channel_is_busy(_dma))
+    if (dma_channel_is_busy(_dma)) {
         return true;
+    }
 
     return !pio_sm_is_tx_fifo_empty(_pio, _sm);
 }
