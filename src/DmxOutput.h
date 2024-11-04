@@ -23,10 +23,11 @@
 
 class DmxOutput
 {
-    uint _prgm_offset;
-    uint _pin;
-    uint _sm;
     PIO _pio;
+    uint _sm;
+    int _offset;
+    bool _preloaded;
+    uint _pin;
     uint _dma;
 
 public:
@@ -63,7 +64,7 @@ public:
        DMX instances. If you really need more, you can
        run 4 more on pio1  
     */
-    return_code begin(uint pin, PIO pio = pio0);
+    return_code begin(uint pin, PIO pio = pio0, int preLoadedOffset = -1);
 
     /*
         write a DMX universe to the DMX transmitter instance.

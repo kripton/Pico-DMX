@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2021 Jostein Løwer 
  *
@@ -13,21 +12,25 @@
   #include <irq.h>
 #else
   #include "hardware/clocks.h"
-  #include "hardware/irq.h"
 #endif
 
-DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
+DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio, int preLoadedOffset)
 {
-    /* 
-    Attempt to load the DMX PIO assembly program 
-    into the PIO program memory
-    */
-
-    if (!pio_can_add_program(pio, &DmxOutput_program))
-    {
-        return ERR_INSUFFICIENT_PRGM_MEM;
+    if (preLoadedOffset < 0) {
+        /* 
+        Attempt to load the DMX PIO assembly program 
+        into the PIO program memory
+        */
+        if (!pio_can_add_program(pio, &DmxOutput_program))
+        {
+            return ERR_INSUFFICIENT_PRGM_MEM;
+        }
+        _offset = pio_add_program(pio, &DmxOutput_program);
+        _preloaded = false;
+    } else {
+        _offset = preLoadedOffset;
+        _preloaded = true;
     }
-    uint prgm_offset = pio_add_program(pio, &DmxOutput_program);
 
     /* 
     Attempt to claim an unused State Machine 
@@ -45,7 +48,7 @@ DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
     pio_gpio_init(pio, pin);
 
     // Generate the default PIO state machine config provided by pioasm
-    pio_sm_config sm_conf = DmxOutput_program_get_default_config(prgm_offset);
+    pio_sm_config sm_conf = DmxOutput_program_get_default_config(_offset);
 
     // Setup the side-set pins for the PIO state machine
     sm_config_set_out_pins(&sm_conf, pin, 1);
@@ -56,15 +59,16 @@ DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
     sm_config_set_clkdiv(&sm_conf, clk_div);
 
     // Load our configuration, jump to the start of the program and run the State Machine
-    pio_sm_init(pio, sm, prgm_offset, &sm_conf);
+    pio_sm_init(pio, sm, _offset, &sm_conf);
     pio_sm_set_enabled(pio, sm, true);
 
     // Claim an unused DMA channel.
     // The channel is kept througout the lifetime of the DMX source
     int dma = dma_claim_unused_channel(false);
 
-    if (dma == -1)
+    if (dma == -1) {
         return ERR_NO_DMA_AVAILABLE;
+    }
 
     // Get the default DMA config for our claimed channel
     dma_channel_config dma_conf = dma_channel_get_default_config(dma);
@@ -83,7 +87,6 @@ DmxOutput::return_code DmxOutput::begin(uint pin, PIO pio)
     dma_channel_set_config(dma, &dma_conf, false);
 
     // Set member values of C++ class
-    _prgm_offset = prgm_offset;
     _pio = pio;
     _sm = sm;
     _pin = pin;
@@ -101,7 +104,7 @@ void DmxOutput::write(uint8_t *universe, uint length)
     pio_sm_restart(_pio, _sm);
 
     // Start the DMX PIO program from the beginning
-    pio_sm_exec(_pio, _sm, pio_encode_jmp(_prgm_offset));
+    pio_sm_exec(_pio, _sm, pio_encode_jmp(_offset));
 
     // Restart the PIO state machinge
     pio_sm_set_enabled(_pio, _sm, true);
@@ -135,8 +138,10 @@ void DmxOutput::end()
     // Stop the PIO state machine
     pio_sm_set_enabled(_pio, _sm, false);
 
-    // Remove the PIO DMX program from the PIO program memory
-    pio_remove_program(_pio, &DmxOutput_program, _prgm_offset);
+    if (!_preloaded) {
+        // Remove the PIO DMX program from the PIO program memory
+        pio_remove_program(_pio, &DmxOutput_program, _offset);
+    }
 
     // Unclaim the DMA channel
     dma_channel_unclaim(_dma);

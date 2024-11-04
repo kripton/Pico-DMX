@@ -84,7 +84,7 @@ DmxInput::return_code DmxInput::begin(uint pin, uint num_channels, PIO pio, int 
         _offset = pio_add_program(pio, &DmxInput_program);
         _preloaded = false;
     } else {
-        _offset = -preLoadedOffset;
+        _offset = preLoadedOffset;
         _preloaded = true;
     }
 
