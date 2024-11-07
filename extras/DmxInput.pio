@@ -11,7 +11,7 @@
 restart:
 
 break_reset:
-    set x, 28                           ; Setup a counter to count the iterations on break_loop
+    set x, 20                           ; Setup a counter to count the iterations on break_loop
 
 break_loop:                             ; Break loop lasts for 3us. The entire break must be minimum 29*3us = 87us
     jmp pin break_reset                 ; Go back to start if pin goes high during the break
@@ -33,13 +33,13 @@ loop1:
     jmp y-- start_bit_outer_loop        ; Loop back to the outer loop
     jmp end_of_frame                    ; Timeout the wait for start bit after about 100uS
 start_found:
-    set x, 7    [7]                     ; Preload bit counter, then delay until halfway through
+    set x, 7    [4]                     ; Preload bit counter, then delay until halfway through
 
 bitloop:
     in pins, 1                          ; Shift data bit into ISR
     jmp x-- bitloop      [6]            ; Loop 8 times, each loop iteration is exactly 4us
 
-    jmp pin stop_good_1   [6]           ; Read the first stop bit, jump if it's good
+    jmp pin stop_good_1   [9]           ; Read the first stop bit, jump if it's good
     jmp bad_stop
 stop_good_1:
     in NULL, 24                         ; Push 24 more bits into the ISR so that our one byte is at the position where the DMA expects it

@@ -16,7 +16,7 @@
 #define DmxInput_wrap 21
 
 static const uint16_t DmxInput_program_instructions[] = {
-    0xe03c, //  0: set    x, 28                      
+    0xe034, //  0: set    x, 20                      
     0x00c0, //  1: jmp    pin, 0                     
     0x0441, //  2: jmp    x--, 1                 [4] 
     0x20a0, //  3: wait   1 pin, 0                   
@@ -30,10 +30,10 @@ static const uint16_t DmxInput_program_instructions[] = {
     0x0048, // 10: jmp    x--, 8                     
     0x0087, // 11: jmp    y--, 7                     
     0x0016, // 12: jmp    22                         
-    0xe727, // 13: set    x, 7                   [7] 
+    0xe427, // 13: set    x, 7                   [4] 
     0x4001, // 14: in     pins, 1                    
     0x064e, // 15: jmp    x--, 14                [6] 
-    0x06d2, // 16: jmp    pin, 18                [6] 
+    0x09d2, // 16: jmp    pin, 18                [9] 
     0x0017, // 17: jmp    23                         
     0x4078, // 18: in     null, 24                   
     0x00d5, // 19: jmp    pin, 21                    
